@@ -1,0 +1,94 @@
+name: Auto label all issues in milestone
+
+on:
+  issues:
+    types: [milestoned]
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  label-milestone-issues:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}  # used by `gh` CLI
+    steps:
+      - name: Ensure unito_* label exists for this milestone
+        id: milestone_label
+        run: |
+          repo="${{ github.repository }}"
+          milestone_number="${{ github.event.issue.milestone.number }}"
+
+          echo "Milestone number: $milestone_number"
+
+          # Fetch milestone details
+          milestone=$(gh api repos/$repo/milestones/$milestone_number)
+          desc=$(echo "$milestone" | jq -r '.description // ""')
+
+          # Try to find an existing 'unito_N' in the description
+          existing_label=$(echo "$desc" | grep -o 'unito_[0-9]\+' | head -n1 || true)
+
+          if [ -n "$existing_label" ]; then
+            echo "Reusing existing label: $existing_label"
+            echo "label=$existing_label" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "No existing unito_ label found for milestone, computing next one…"
+
+          # Get all labels starting with unito_
+          labels=$(gh label list --json name -q '.[].name' | grep '^unito_' || true)
+
+          if [ -z "$labels" ]; then
+            next=1
+          else
+            max=$(echo "$labels" | sed 's/unito_//' | sort -n | tail -1)
+            next=$((max + 1))
+          fi
+
+          label="unito_$next"
+          echo "Using new label: $label"
+
+          # Create label if it doesn't exist yet
+          gh label create "$label" \
+            --color 1D76DB \
+            --description "Auto-generated milestone label" || true
+
+          # Append label info to milestone description so we can reuse it later
+          if [ -z "$desc" ] || [ "$desc" = "null" ]; then
+            new_desc="Label: $label"
+          else
+            new_desc="$desc"$'\n'"Label: $label"
+          fi
+
+          gh api \
+            --method PATCH \
+            repos/$repo/milestones/$milestone_number \
+            -f description="$new_desc" >/dev/null
+
+          echo "label=$label" >> "$GITHUB_OUTPUT"
+
+      - name: Apply label to all issues in this milestone
+        run: |
+          repo="${{ github.repository }}"
+          milestone_number="${{ github.event.issue.milestone.number }}"
+          label="${{ steps.milestone_label.outputs.label }}"
+
+          echo "Applying label '$label' to all issues in milestone #$milestone_number"
+
+          # List all non-PR issues in this milestone and label them
+          gh api \
+            repos/$repo/issues \
+            --paginate \
+            -q '.[] 
+              | select(.milestone != null 
+                       and .milestone.number=='"$milestone_number"' 
+                       and (.pull_request | not)) 
+              | .number' |
+          while read -r issue; do
+            if [ -n "$issue" ]; then
+              echo "Adding label '$label' to issue #$issue"
+              gh issue edit "$issue" --add-label "$label"
+            fi
+          done
