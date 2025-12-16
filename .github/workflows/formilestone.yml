@@ -1,0 +1,111 @@
+name: Create / Sync Jira Epic from Milestone
+
+on:
+  milestone:
+    types: [created, edited]
+
+jobs:
+  sync_jira_epic:
+    runs-on: ubuntu-latest
+
+    env:
+      # Jira config
+      JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+      JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+      JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+      JIRA_PROJECT_KEY: SCITD
+
+      # Milestone data from the event payload
+      MILESTONE_TITLE: ${{ github.event.milestone.title }}
+      MILESTONE_DESC: ${{ github.event.milestone.description }}
+
+    steps:
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Find existing Jira Epic by milestone title
+        id: find_epic
+        run: |
+          # Escape double quotes in title for JQL
+          SAFE_TITLE=${MILESTONE_TITLE//\"/\\\"}
+
+          # JQL: Epics in SCITD whose summary contains the milestone title
+          JQL="project = ${JIRA_PROJECT_KEY} AND issuetype = Epic AND summary ~ \"${SAFE_TITLE}\""
+
+          echo "Searching Jira with JQL: $JQL"
+
+          RESPONSE=$(curl -s -G \
+            -u "${JIRA_USER_EMAIL}:${JIRA_API_TOKEN}" \
+            --data-urlencode "jql=${JQL}" \
+            --data-urlencode "maxResults=2" \
+            "${JIRA_BASE_URL}/rest/api/3/search")
+
+          echo "Raw response: $RESPONSE"
+
+          TOTAL=$(echo "$RESPONSE" | jq '.total')
+          echo "Jira issues found: $TOTAL"
+
+          if [ "$TOTAL" -gt 0 ]; then
+            ISSUE_KEY=$(echo "$RESPONSE" | jq -r '.issues[0].key')
+            echo "Found existing Epic: $ISSUE_KEY"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "issue_key=$ISSUE_KEY" >> "$GITHUB_OUTPUT"
+          else
+            echo "No existing Epic found."
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create Jira Epic if it does not exist
+        if: steps.find_epic.outputs.exists == 'false'
+        id: create_epic
+        run: |
+          # Make a JSON-safe version of the description
+          DESC_JSON=$(jq -n --arg d "$MILESTONE_DESC" '$d')
+
+          cat <<EOF > body.json
+          {
+            "fields": {
+              "project": { "key": "${JIRA_PROJECT_KEY}" },
+              "summary": "${MILESTONE_TITLE}",
+              "issuetype": { "name": "Epic" },
+              "description": $DESC_JSON
+            }
+          }
+          EOF
+
+          echo "Creating Jira Epic for milestone \"${MILESTONE_TITLE}\" in project ${JIRA_PROJECT_KEY}"
+
+          RESPONSE=$(curl -s -X POST \
+            -u "${JIRA_USER_EMAIL}:${JIRA_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data @body.json \
+            "${JIRA_BASE_URL}/rest/api/3/issue")
+
+          echo "Create response: $RESPONSE"
+          ISSUE_KEY=$(echo "$RESPONSE" | jq -r '.key')
+          echo "new_issue_key=$ISSUE_KEY" >> "$GITHUB_OUTPUT"
+
+      - name: Update existing Jira Epic when milestone is edited
+        if: github.event.action == 'edited' && steps.find_epic.outputs.exists == 'true'
+        run: |
+          ISSUE_KEY="${{ steps.find_epic.outputs.issue_key }}"
+          echo "Updating Jira Epic ${ISSUE_KEY} from edited milestone"
+
+          DESC_JSON=$(jq -n --arg d "$MILESTONE_DESC" '$d')
+
+          cat <<EOF > update.json
+          {
+            "fields": {
+              "summary": "${MILESTONE_TITLE}",
+              "description": $DESC_JSON
+            }
+          }
+          EOF
+
+          RESPONSE=$(curl -s -X PUT \
+            -u "${JIRA_USER_EMAIL}:${JIRA_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data @update.json \
+            "${JIRA_BASE_URL}/rest/api/3/issue/${ISSUE_KEY}")
+
+          echo "Update response: $RESPONSE"
