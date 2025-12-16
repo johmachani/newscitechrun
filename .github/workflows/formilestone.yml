@@ -13,7 +13,7 @@ jobs:
       JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
       JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
       JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
-      JIRA_PROJECT_KEY: SCITD
+      JIRA_PROJECT_KEY: SCIT2
 
       # Milestone data from the event payload
       MILESTONE_TITLE: ${{ github.event.milestone.title }}
@@ -29,7 +29,7 @@ jobs:
           # Escape double quotes in title for JQL
           SAFE_TITLE=${MILESTONE_TITLE//\"/\\\"}
 
-          # JQL: Epics in SCITD whose summary contains the milestone title
+          # JQL: Epics in SCIT2 whose summary contains the milestone title
           JQL="project = ${JIRA_PROJECT_KEY} AND issuetype = Epic AND summary ~ \"${SAFE_TITLE}\""
 
           echo "Searching Jira with JQL: $JQL"
