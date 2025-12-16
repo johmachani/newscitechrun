@@ -22,7 +22,7 @@ jobs:
 
           echo "Milestone number: $milestone_number"
 
-          # Fetch milestone details
+          # Fetch milestone details (repo is in the URL here, so it's fine)
           milestone=$(gh api repos/$repo/milestones/$milestone_number)
           desc=$(echo "$milestone" | jq -r '.description // ""')
 
@@ -38,7 +38,7 @@ jobs:
           echo "No existing unito_ label found for milestone, computing next one…"
 
           # Get all labels starting with unito_
-          labels=$(gh label list --json name -q '.[].name' | grep '^unito_' || true)
+          labels=$(gh label list --repo "$repo" --json name -q '.[].name' | grep '^unito_' || true)
 
           if [ -z "$labels" ]; then
             next=1
@@ -52,6 +52,7 @@ jobs:
 
           # Create label if it doesn't exist yet
           gh label create "$label" \
+            --repo "$repo" \
             --color 1D76DB \
             --description "Auto-generated milestone label" || true
 
@@ -89,6 +90,6 @@ jobs:
           while read -r issue; do
             if [ -n "$issue" ]; then
               echo "Adding label '$label' to issue #$issue"
-              gh issue edit "$issue" --add-label "$label"
+              gh issue edit "$issue" --repo "$repo" --add-label "$label"
             fi
           done
