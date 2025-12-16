@@ -9,19 +9,24 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      # Jira config
-      JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+      # Jira config (from GitHub secrets)
+      JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}        # e.g. https://your-domain.atlassian.net
       JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
       JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
       JIRA_PROJECT_KEY: SCIT2
 
-      # Milestone data from the event payload
+      # Milestone data from the GitHub event payload
       MILESTONE_TITLE: ${{ github.event.milestone.title }}
       MILESTONE_DESC: ${{ github.event.milestone.description }}
 
     steps:
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Log milestone data (for debugging)
+        run: |
+          echo "Milestone title:       $MILESTONE_TITLE"
+          echo "Milestone description: $MILESTONE_DESC"
 
       - name: Find existing Jira Epic by milestone title
         id: find_epic
@@ -59,21 +64,36 @@ jobs:
         if: steps.find_epic.outputs.exists == 'false'
         id: create_epic
         run: |
-          # Make a JSON-safe version of the description
-          DESC_JSON=$(jq -n --arg d "$MILESTONE_DESC" '$d')
+          # JSON-escape the title and description safely using jq
+          TITLE_JSON=$(printf '%s' "$MILESTONE_TITLE" | jq -Rs .)
+          DESC_JSON=$(printf '%s' "$MILESTONE_DESC" | jq -Rs .)
 
           cat <<EOF > body.json
           {
             "fields": {
               "project": { "key": "${JIRA_PROJECT_KEY}" },
-              "summary": "${MILESTONE_TITLE}",
+              "summary": ${TITLE_JSON},
               "issuetype": { "name": "Epic" },
-              "description": $DESC_JSON
+              "description": {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": ${DESC_JSON}
+                      }
+                    ]
+                  }
+                ]
+              }
             }
           }
           EOF
 
-          echo "Creating Jira Epic for milestone \"${MILESTONE_TITLE}\" in project ${JIRA_PROJECT_KEY}"
+          echo "Creating Jira Epic for milestone ${MILESTONE_TITLE} in project ${JIRA_PROJECT_KEY}"
 
           RESPONSE=$(curl -s -X POST \
             -u "${JIRA_USER_EMAIL}:${JIRA_API_TOKEN}" \
@@ -91,13 +111,28 @@ jobs:
           ISSUE_KEY="${{ steps.find_epic.outputs.issue_key }}"
           echo "Updating Jira Epic ${ISSUE_KEY} from edited milestone"
 
-          DESC_JSON=$(jq -n --arg d "$MILESTONE_DESC" '$d')
+          TITLE_JSON=$(printf '%s' "$MILESTONE_TITLE" | jq -Rs .)
+          DESC_JSON=$(printf '%s' "$MILESTONE_DESC" | jq -Rs .)
 
           cat <<EOF > update.json
           {
             "fields": {
-              "summary": "${MILESTONE_TITLE}",
-              "description": $DESC_JSON
+              "summary": ${TITLE_JSON},
+              "description": {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": ${DESC_JSON}
+                      }
+                    ]
+                  }
+                ]
+              }
             }
           }
           EOF
