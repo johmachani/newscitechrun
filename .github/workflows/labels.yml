@@ -1,0 +1,42 @@
+name: Auto Label Milestone
+
+on:
+  issues:
+    types: [milestoned]
+  pull_request:
+    types: [milestoned]
+
+jobs:
+  add-milestone-label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get latest unito_* label number
+        id: labels
+        run: |
+          labels=$(gh label list --json name -q '.[].name' | grep '^unito_' || true)
+          if [ -z "$labels" ]; then
+            next=1
+          else
+            max=$(echo "$labels" | sed 's/unito_//' | sort -n | tail -1)
+            next=$((max + 1))
+          fi
+          echo "next_label=unito_$next" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create label if not exists
+        run: |
+          gh label create "${{ steps.labels.outputs.next_label }}" \
+            --color 1D76DB --description "Auto-generated label" || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Add label to milestone
+        run: |
+          milestone_number=${{ github.event.issue.milestone.number || github.event.pull_request.milestone.number }}
+          gh api \
+            repos/${{ github.repository }}/milestones/$milestone_number \
+            --method PATCH \
+            -f description="Label: ${{ steps.labels.outputs.next_label }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
